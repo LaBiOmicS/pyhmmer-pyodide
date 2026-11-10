@@ -1,0 +1,148 @@
+diff -ruN -x build -x .pyodide_build -x '*.orig' pristine/pyhmmer-0.12.3/CMakeLists.txt src/pyhmmer-0.12.3/CMakeLists.txt
+--- pristine/pyhmmer-0.12.3/CMakeLists.txt	2022-11-09 12:37:21.000000000 +0000
++++ src/pyhmmer-0.12.3/CMakeLists.txt	2026-11-10 11:43:44.472442474 +0000
+@@ -2,6 +2,11 @@
+ project(${SKBUILD_PROJECT_NAME} VERSION ${SKBUILD_PROJECT_VERSION} LANGUAGES C)
+ 
+ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
++if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
++    # Keep each extension on its own copy of libeasel/libhmmer: cross-module
++    # calls go through JS and cannot carry SIMD (v128) arguments.
++    set(CMAKE_C_VISIBILITY_PRESET hidden)
++endif()
+ 
+ set_property(GLOBAL PROPERTY PYTHON_EXTENSIONS_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
+ 
+diff -ruN -x build -x .pyodide_build -x '*.orig' pristine/pyhmmer-0.12.3/src/pyhmmer/platform/CMakeLists.txt src/pyhmmer-0.12.3/src/pyhmmer/platform/CMakeLists.txt
+--- pristine/pyhmmer-0.12.3/src/pyhmmer/platform/CMakeLists.txt	2022-11-09 12:37:21.000000000 +0000
++++ src/pyhmmer-0.12.3/src/pyhmmer/platform/CMakeLists.txt	2026-11-10 11:39:46.611295541 +0000
+@@ -2,7 +2,7 @@
+ 
+ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+     cython_extension(win32  LINKS libeasel)
+-elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
++elseif((CMAKE_SYSTEM_NAME STREQUAL "Linux") OR (CMAKE_SYSTEM_NAME STREQUAL "Emscripten"))
+     cython_extension(linux  LINKS libeasel)
+ elseif((CMAKE_SYSTEM_NAME STREQUAL "Darwin") OR (CMAKE_SYSTEM_NAME MATCHES ".*BSD"))
+     cython_extension(bsd    LINKS libeasel)
+diff -ruN -x build -x .pyodide_build -x '*.orig' pristine/pyhmmer-0.12.3/src/pyhmmer/platform/__init__.pxd src/pyhmmer-0.12.3/src/pyhmmer/platform/__init__.pxd
+--- pristine/pyhmmer-0.12.3/src/pyhmmer/platform/__init__.pxd	2022-11-09 12:37:21.000000000 +0000
++++ src/pyhmmer-0.12.3/src/pyhmmer/platform/__init__.pxd	2026-11-10 11:39:46.607376703 +0000
+@@ -1,4 +1,4 @@
+-if TARGET_SYSTEM == "Linux":
++if TARGET_SYSTEM == "Linux" or TARGET_SYSTEM == "Emscripten":
+     from .linux cimport (
+         _LinuxReader as _FileobjReader,
+         _LinuxWriter as _FileobjWriter,
+diff -ruN -x build -x .pyodide_build -x '*.orig' pristine/pyhmmer-0.12.3/vendor/easel/esl_cpu.c src/pyhmmer-0.12.3/vendor/easel/esl_cpu.c
+--- pristine/pyhmmer-0.12.3/vendor/easel/esl_cpu.c	2022-11-09 12:37:21.000000000 +0000
++++ src/pyhmmer-0.12.3/vendor/easel/esl_cpu.c	2026-11-10 11:35:39.033574680 +0000
+@@ -201,7 +201,11 @@
+ static void 
+ cpu_run_id(uint32_t eax, uint32_t ecx, uint32_t *abcd)
+ {
+-#if defined(_MSC_VER)
++#if defined(__EMSCRIPTEN__)
++  /* WebAssembly: no cpuid; SSE is emulated on wasm SIMD128 (see cpu_has_sse*) */
++  (void) eax; (void) ecx;
++  abcd[0] = abcd[1] = abcd[2] = abcd[3] = 0;
++#elif defined(_MSC_VER)
+   __cpuidex(abcd, eax, ecx);
+ #else
+   uint32_t ebx = 0;
+@@ -280,6 +284,9 @@
+ static int
+ cpu_has_sse(void)
+ {
++#if defined(__EMSCRIPTEN__)
++  return 1;  /* compiled with -msimd128 emulation */
++#endif
+   uint32_t abcd[4];
+   uint32_t sse2_mask =  (1 << 25) |  // edx: SSE
+                         (1 << 26);   //      SSE2
+@@ -301,6 +308,9 @@
+ static int
+ cpu_has_sse4(void)
+ {
++#if defined(__EMSCRIPTEN__)
++  return 1;  /* compiled with -msimd128 emulation */
++#endif
+   uint32_t abcd[4];
+   uint32_t sse2_mask =  (1 << 25) |  // edx: SSE
+                         (1 << 26);   //      SSE2
+diff -ruN -x build -x .pyodide_build -x '*.orig' pristine/pyhmmer-0.12.3/vendor/easel/esl_sse.c src/pyhmmer-0.12.3/vendor/easel/esl_sse.c
+--- pristine/pyhmmer-0.12.3/vendor/easel/esl_sse.c	2022-11-09 12:37:21.000000000 +0000
++++ src/pyhmmer-0.12.3/vendor/easel/esl_sse.c	2026-11-10 11:37:30.430037407 +0000
+@@ -37,7 +37,11 @@
+ #include <math.h>
+ #include <float.h>
+ 
++#if defined(__EMSCRIPTEN__)
++#include <smmintrin.h>  /* SSE4.1 emulated on wasm SIMD128 */
++#else
+ #include <x86intrin.h>
++#endif
+ 
+ #include "easel.h"
+ #include "esl_sse.h"
+diff -ruN -x build -x .pyodide_build -x '*.orig' pristine/pyhmmer-0.12.3/vendor/easel/esl_sse.h src/pyhmmer-0.12.3/vendor/easel/esl_sse.h
+--- pristine/pyhmmer-0.12.3/vendor/easel/esl_sse.h	2022-11-09 12:37:21.000000000 +0000
++++ src/pyhmmer-0.12.3/vendor/easel/esl_sse.h	2026-11-10 11:37:30.460892758 +0000
+@@ -22,7 +22,11 @@
+ #include "easel.h"
+ 
+ #include <stdio.h>
+-#include <x86intrin.h>	
++#if defined(__EMSCRIPTEN__)
++#include <smmintrin.h>  /* SSE4.1 emulated on wasm SIMD128 */
++#else
++#include <x86intrin.h>
++#endif
+ 
+ 
+ /*****************************************************************
+diff -ruN -x build -x .pyodide_build -x '*.orig' pristine/pyhmmer-0.12.3/vendor/hmmer/src/impl_sse/decoding.c src/pyhmmer-0.12.3/vendor/hmmer/src/impl_sse/decoding.c
+--- pristine/pyhmmer-0.12.3/vendor/hmmer/src/impl_sse/decoding.c	2022-11-09 12:37:21.000000000 +0000
++++ src/pyhmmer-0.12.3/vendor/hmmer/src/impl_sse/decoding.c	2026-11-10 11:37:30.496583006 +0000
+@@ -12,7 +12,11 @@
+ #include <stdio.h>
+ #include <math.h>
+ 
++#if defined(__EMSCRIPTEN__)
++#include <smmintrin.h>  /* SSE4.1 emulated on wasm SIMD128 */
++#else
+ #include <x86intrin.h>
++#endif
+ 
+ #include "easel.h"
+ #include "esl_sse.h"
+diff -ruN -x build -x .pyodide_build -x '*.orig' pristine/pyhmmer-0.12.3/vendor/hmmer/src/impl_sse/p7_oprofile.c src/pyhmmer-0.12.3/vendor/hmmer/src/impl_sse/p7_oprofile.c
+--- pristine/pyhmmer-0.12.3/vendor/hmmer/src/impl_sse/p7_oprofile.c	2022-11-09 12:37:21.000000000 +0000
++++ src/pyhmmer-0.12.3/vendor/hmmer/src/impl_sse/p7_oprofile.c	2026-11-10 11:50:43.837727677 +0000
+@@ -669,7 +669,7 @@
+   uint8_t b;
+ 
+   sc  = -1.0f * roundf(om->scale_b * sc);                          /* ugh. sc is now an integer cost represented in a float...           */
+-  b   = (sc > 255 - om->bias_b) ? 255 : (uint8_t) sc + om->bias_b; /* and now we cast, saturate, and bias it to an unsigned char cost... */
++  b   = (sc > 255 - om->bias_b) ? 255 : (uint8_t) (int) sc + om->bias_b; /* and now we cast, saturate, and bias it to an unsigned char cost... */
+   return b;
+ }
+  
+@@ -685,7 +685,7 @@
+   uint8_t b;
+ 
+   sc  = -1.0f * roundf(om->scale_b * sc);       /* ugh. sc is now an integer cost represented in a float...    */
+-  b   = (sc > 255.) ? 255 : (uint8_t) sc;	/* and now we cast and saturate it to an unsigned char cost... */
++  b   = (sc > 255.) ? 255 : (uint8_t) (int) sc;	/* and now we cast and saturate it to an unsigned char cost... */
+   return b;
+ }
+  
+@@ -701,7 +701,7 @@
+   sc  = roundf(om->scale_w * sc);
+   if      (sc >=  32767.0) return  32767;
+   else if (sc <= -32768.0) return -32768;
+-  else return (int16_t) sc;
++  else return (int16_t) (int) sc;
+ }
+ 
+ 

@@ -1,0 +1,9 @@
+{
+  "name": "pyhmmer-pyodide-tests",
+  "private": true,
+  "type": "module",
+  "description": "Test harness for the pyhmmer Pyodide wheel",
+  "dependencies": {
+    "pyodide": "0.27.8"
+  }
+}
